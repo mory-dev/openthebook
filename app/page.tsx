@@ -103,7 +103,7 @@ export default function Home() {
       </section>
 
       <section className="faq section-shell" id="faq">
-        <div className="section-intro"><p className="eyebrow">Good questions</p><h2>Keep it<br /><em>straightforward.</em></h2></div>
+        <div className="section-intro"><p className="eyebrow">Good questions</p><h2>Keep it<br /><em>simple.</em></h2></div>
         <div className="faq-list">
           <details open><summary>Is OpenTheBook really free? <span>+</span></summary><p>Yes. OpenTheBook is free software with no subscription, account, ads, or in-app purchases.</p></details>
           <details><summary>Where are my books stored? <span>+</span></summary><p>Your books stay wherever you put them on your computer. OpenTheBook does not upload or manage your files.</p></details>
