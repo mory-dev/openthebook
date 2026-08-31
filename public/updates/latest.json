@@ -1,5 +1,15 @@
 {
-  "version": "0.0.0",
-  "notes": "OpenTheBook updates will appear here after the first release.",
-  "platforms": {}
+  "version": "0.1.0",
+  "notes": "OpenTheBook 0.1.0",
+  "pub_date": "2026-08-31T16:08:19.405Z",
+  "platforms": {
+    "windows-x86_64": {
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTdytzamhBejhCRmUyMEZYa2NWQWxRbWlTZThTcUhneDVGa0wyWmphVVI5RXE5a0c2NkFKdGZ4bGJSdlVnM2dPNFEwNnA3anIxN0FpVHcrbFd3d3lyQjk2K3J2bThtdmdVPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg4MTkxODY1CWZpbGU6T3BlblRoZUJvb2tfMC4xLjBfeDY0LXNldHVwLmV4ZQpmM0FNSTVTZjQyK1NHUXd6aEN5YjBEbmg5TTZiaTI2N2VqNElLWnh0K1B2WjZFMlorRjNqWTNZVWN6eTkvbnRGQktLYkowemZXMlQ5SzEyU254bFNDdz09Cg==",
+      "url": "https://github.com/mory-dev/openthebook/releases/download/v0.1.0/OpenTheBook_0.1.0_x64-setup.exe"
+    },
+    "linux-x86_64": {
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTdytzamhBejhCRlgzWHN0WkxweDRLbEp2LzRqL0hTV2dtUjdyNVArUnFBR1ljQXBOei9yK3RheHk4UEd0WlVHb094aS9Dbjlmbmw0cHBvQ3NwVloyQnZlblJDaXdoWEFnPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg4MTkxNzE1CWZpbGU6T3BlblRoZUJvb2tfMC4xLjBfYW1kNjQuQXBwSW1hZ2UKeWlwZGxCMUNxdXdsd24zSE9nZzFOcm40a05mV2pLSnBYZk5uVGJVZ1NoNlExdi9EbU5xZnc2M1hwNk42cGp2dys4TXJyYWFuV2JyZVlaREtpSThMRHc9PQo=",
+      "url": "https://github.com/mory-dev/openthebook/releases/download/v0.1.0/OpenTheBook_0.1.0_amd64.AppImage"
+    }
+  }
 }
