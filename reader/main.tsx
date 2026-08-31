@@ -56,7 +56,7 @@ function parseBookInWorker(buffer: ArrayBuffer, format: WorkerBookFormat): Promi
     worker.onmessage = (event: MessageEvent<{ error?: string; parsed?: ParsedBook }>) => {
       worker.terminate();
       if (event.data.parsed) resolve(event.data.parsed);
-      else reject(new Error(event.data.error || 'That book could not be opened.'));
+      else void parseOnMainThread(fallbackBuffer, format).then(resolve, reject);
     };
     worker.onerror = () => {
       worker.terminate();
@@ -72,6 +72,18 @@ function isTauri(): boolean {
 
 function shortName(path: string): string {
   return path.split(/[\\/]/).pop() || path;
+}
+
+function normalizeBookPath(path: string): string {
+  const trimmed = path.trim().replace(/^"(.*)"$/, '$1');
+  if (!trimmed.toLowerCase().startsWith('file://')) return trimmed;
+  try {
+    const url = new URL(trimmed);
+    const decodedPath = decodeURIComponent(url.pathname);
+    return decodedPath.replace(/^\/([A-Za-z]:)/, '$1').replace(/\//g, '\\');
+  } catch {
+    return trimmed;
+  }
 }
 
 function uid(): string {
@@ -216,6 +228,7 @@ function App() {
   const [busy, setBusy] = useState(false);
   const [initialized, setInitialized] = useState(false);
   const [message, setMessage] = useState('');
+  const [openError, setOpenError] = useState<{ path: string; message: string } | null>(null);
   const [updateState, setUpdateState] = useState<UpdateState>('idle');
   const [version, setVersion] = useState('0.1.0');
   const [systemDark, setSystemDark] = useState(() => (
@@ -297,23 +310,26 @@ function App() {
 
   const handleFile = useCallback(async (path: string, bytes?: ArrayBuffer, savedProgress?: BookProgress) => {
     const requestId = ++loadRequestRef.current;
-    const format = formatFromPath(path);
+    const normalizedPath = normalizeBookPath(path);
+    const format = formatFromPath(normalizedPath);
     if (!format) { setMessage('OpenTheBook reads PDF, EPUB, AZW3, and MOBI files.'); return; }
     setBusy(true);
+    setOpenError(null);
     restoringProgressRef.current = true;
-    setMessage(`Opening ${shortName(path)}…`);
+    setMessage(`Opening ${shortName(normalizedPath)}…`);
     try {
-      const buffer = bytes ?? (await readFile(path)).buffer;
+      const fileBytes = bytes ? null : await readFile(normalizedPath);
+      const buffer = bytes ?? fileBytes!.buffer.slice(fileBytes!.byteOffset, fileBytes!.byteOffset + fileBytes!.byteLength);
       if (requestId !== loadRequestRef.current) return;
       const parsed: ParsedBook = format === 'pdf'
-        ? { title: shortName(path).replace(/\.pdf$/i, ''), format, chapters: [] }
+        ? { title: shortName(normalizedPath).replace(/\.pdf$/i, ''), format, chapters: [] }
         : await parseBookInWorker(buffer, format);
       if (requestId !== loadRequestRef.current) return;
-      if (!parsed.author) parsed.author = authorFromFilename(path);
+      if (!parsed.author) parsed.author = authorFromFilename(normalizedPath);
       
       const targetChapter = savedProgress?.chapter ?? parsed.startChapter ?? 0;
       materializedCache.clear();
-      setBook({ ...parsed, path, buffer });
+      setBook({ ...parsed, path: normalizedPath, buffer });
       setChapter(targetChapter);
       appliedModeRef.current = settingsRef.current.displayFullBook;
       setMessage('');
@@ -353,11 +369,11 @@ function App() {
 
       setReadingState((prev) => {
         const nextState: ReadingState = {
-          lastBookPath: path,
+          lastBookPath: normalizedPath,
           progress: {
             ...prev.progress,
-            [path]: {
-              filePath: path,
+            [normalizedPath]: {
+              filePath: normalizedPath,
               chapter: targetChapter,
               exactScrollTop: savedProgress?.exactScrollTop,
               chapterOffsetRatio: targetRatio,
@@ -373,7 +389,9 @@ function App() {
     } catch (error) {
       if (requestId !== loadRequestRef.current) return;
       console.error('[handleFile] Could not open book:', error);
-      setMessage(error instanceof Error ? error.message : 'That book could not be opened.');
+      const errorMessage = error instanceof Error ? error.message : 'That book could not be opened.';
+      setMessage(errorMessage);
+      setOpenError({ path: normalizedPath, message: errorMessage });
       setInitialized(true);
       restoringProgressRef.current = false;
       pendingRestoreRef.current = null;
@@ -601,8 +619,9 @@ function App() {
       setSettings(loadedSettings);
       setReadingState(state);
 
-      const targetPath = initialPath || state.lastBookPath;
-      if (targetPath) {
+      const rawTargetPath = initialPath || state.lastBookPath;
+      if (rawTargetPath) {
+        const targetPath = normalizeBookPath(rawTargetPath);
         void handleFile(targetPath, undefined, state.progress[targetPath]);
       } else {
         setInitialized(true);
@@ -1125,7 +1144,9 @@ function App() {
       : book
       ? <BookContent book={book} chapter={chapter} displayFullBook={settings.displayFullBook} fontScale={settings.fontScale} onContextMenu={handleContextMenu} bookRef={bookRef} />
       : initialized
-        ? <EmptyState onChoose={chooseBook} />
+        ? openError
+          ? <OpenErrorState error={openError} onRetry={() => void handleFile(openError.path)} onChoose={chooseBook} />
+          : <EmptyState onChoose={chooseBook} />
         : <StartupSurface />;
 
   return <div className={`reader-app ${settings.fullscreen ? 'reader-fullscreen' : 'reader-windowed'} ${book ? 'reader-book-active' : ''} ${!initialized ? 'reader-starting' : ''} ${dark ? 'reader-dark' : ''}`} onDrop={onDrop} onDragOver={(event) => event.preventDefault()} onContextMenu={(event) => {
@@ -1303,6 +1324,10 @@ function StartupSurface() {
 
 function EmptyState({ onChoose }: { onChoose: () => void }) {
   return <div className="empty-state"><img src="/logo.png" alt="" width="112" height="112" /><p className="empty-kicker">A quiet place to read</p><h1>Just open a book.</h1><p>Drop a PDF, EPUB, AZW3, or MOBI file here, or choose one from your computer.</p><button className="open-button" onClick={onChoose}>Choose a book <Icon name="arrow-right" size={15} /></button></div>;
+}
+
+function OpenErrorState({ error, onRetry, onChoose }: { error: { path: string; message: string }; onRetry: () => void; onChoose: () => void }) {
+  return <div className="empty-state open-error-state"><img src="/logo.png" alt="" width="88" height="88" /><p className="empty-kicker">OpenTheBook could not load this file</p><h1>Couldn’t open this book.</h1><p className="open-error-message">{error.message}</p><div className="open-error-actions"><button className="open-button" onClick={onRetry}>Try again <Icon name="arrow-right" size={15} /></button><button className="mini-button" onClick={onChoose}>Choose another book</button></div></div>;
 }
 
 function PdfView({ path, data, initialPage = 1, displayFullBook = true, fontScale = 1.0, onPageChange }: { path: string; data?: ArrayBuffer; initialPage?: number; displayFullBook?: boolean; fontScale?: number; onPageChange?: (page: number, total: number) => void }) {
