@@ -122,7 +122,7 @@ jobs:
           appimage=$(find src-tauri/target/release/bundle/appimage -maxdepth 1 -name '*.AppImage' -type f | head -n 1)
           test -n "$appimage"
           cp "$appimage" release-staged/linux/
-          cp "$appimage.sig" release-staged/linux/
+          if [ -f "$appimage.sig" ]; then cp "$appimage.sig" release-staged/linux/; fi
           deb=$(find src-tauri/target/release/bundle/deb -maxdepth 1 -name '*.deb' -type f | head -n 1)
           test -n "$deb"
           cp "$deb" release-staged/linux/

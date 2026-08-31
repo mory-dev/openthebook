@@ -55,10 +55,10 @@ In the portal, this is **App registrations → the app → Certificates & secret
 - Repository: `openthebook`
 - Environment: `release`
 
-The important subject is:
+The workflow currently presents this subject to Azure:
 
 ```text
-repo:mory-dev/openthebook:environment:release
+repo:mory-dev@65853356/openthebook@1352466162:environment:release
 ```
 
 CLI alternative after installing Azure CLI and logging in:
