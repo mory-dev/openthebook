@@ -171,6 +171,8 @@ jobs:
           gh release upload "$release_tag" release-artifacts/windows/* release-artifacts/linux/* --repo "$GITHUB_REPOSITORY" --clobber
       - name: Build website with the new release manifest
         run: npm run build
+      - name: Preserve existing Cloudflare custom domains
+        run: node scripts/prepare-cloudflare-deploy.mjs dist/server/wrangler.json
       - name: Deploy website and update manifest to Cloudflare
         uses: cloudflare/wrangler-action@v3
         with:
