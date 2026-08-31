@@ -60,7 +60,7 @@
   },
   "plugins": {
     "updater": {
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEJBMkE5OEM0NUFGQjg3Q0QKUldUTmgvdGF4SmdxdWkxenA0NGloSjdERzJFWk5GU3A1VnI3WUdXbkxJVkYza250bkcxUWswNTQK",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDE1MDEzRjAzRTFDOEZBQjAKUldTdytzamhBejhCRmVQK3dKaEtQOEJRaVI1ZTZWbWxZNHFWdlFIQXpkeEU0aTFCQWtVNnhUVEMK",
       "endpoints": ["https://openthebook.lol/updates/latest.json"],
       "windows": { "installMode": "passive" }
     }

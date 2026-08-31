@@ -128,10 +128,13 @@ Cloudflare deployment:
 
 ```text
 TAURI_SIGNING_PRIVATE_KEY
-TAURI_SIGNING_PRIVATE_KEY_PASSWORD
 CLOUDFLARE_API_TOKEN
 CLOUDFLARE_ACCOUNT_ID
 ```
+
+`TAURI_SIGNING_PRIVATE_KEY_PASSWORD` is optional when the private key is
+unencrypted. If you use an encrypted Tauri key, add that password as a GitHub
+secret as well; never commit either value.
 
 Set the region endpoint as an environment variable named `AZURE_ENDPOINT`.
 The repository already has a `release` environment in the workflow; create
