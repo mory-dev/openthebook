@@ -2,6 +2,8 @@
 
 OpenTheBook is a free, lightweight desktop reader for PDF, EPUB, AZW3, and MOBI files. It is intentionally not a book library: install it, double-click a book, and read.
 
+Website: https://openthebook.lol
+
 ## Local development
 
 ```bash
