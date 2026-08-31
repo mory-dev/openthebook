@@ -8,7 +8,16 @@ const platformCopy: Record<Platform, string> = {
   windows: 'Download for Windows',
   linux: 'Download for Linux',
   mac: 'macOS coming soon',
-  other: 'Choose your download',
+  other: 'See all downloads',
+};
+
+const releaseVersion = '0.1.0';
+const releasePage = `https://github.com/mory-dev/openthebook/releases/tag/v${releaseVersion}`;
+const downloadUrls: Record<Platform, string> = {
+  windows: `https://github.com/mory-dev/openthebook/releases/download/v${releaseVersion}/OpenTheBook_${releaseVersion}_x64-setup.exe`,
+  linux: `https://github.com/mory-dev/openthebook/releases/download/v${releaseVersion}/OpenTheBook_${releaseVersion}_amd64.AppImage`,
+  mac: releasePage,
+  other: releasePage,
 };
 
 function detectPlatform(): Platform {
@@ -23,6 +32,8 @@ export default function Home() {
   const [platform] = useState<Platform>(() => (
     typeof navigator === 'undefined' ? 'other' : detectPlatform()
   ));
+  const downloadAvailable = platform !== 'mac';
+  const downloadUrl = downloadUrls[platform];
 
   return (
     <main>
@@ -45,13 +56,13 @@ export default function Home() {
           <h1>Just open<br /><em>a book.</em></h1>
           <p className="hero-lede">OpenTheBook is a free, lightweight ebook reader for your computer. No library to manage. No account to create. Just your book, ready to read.</p>
           <div className="hero-actions" id="download">
-            <a className="button button-primary button-disabled" href="#release" aria-disabled="true" onClick={(event) => event.preventDefault()}>
+            <a className={`button button-primary${downloadAvailable ? '' : ' button-disabled'}`} href={downloadAvailable ? downloadUrl : '#release'} aria-disabled={!downloadAvailable} onClick={downloadAvailable ? undefined : (event) => event.preventDefault()}>
               <span>{platformCopy[platform]}</span>
               <span className="button-arrow" aria-hidden="true">↓</span>
             </a>
             <a className="text-link" href="#how-it-works">See how it works <span aria-hidden="true">→</span></a>
           </div>
-          <p className="release-note"><span className="status-dot" /> Installer release coming soon</p>
+          <p className="release-note"><span className="status-dot" /> Installer available - v{releaseVersion}</p>
           <div className="format-line" aria-label="Supported formats"><span>PDF</span><i /> <span>EPUB</span><i /> <span>AZW3</span><i /> <span>MOBI</span></div>
         </div>
 
@@ -113,7 +124,7 @@ export default function Home() {
       </section>
 
       <section className="closing section-shell" id="release">
-        <div className="closing-card"><img src="/logo.png" alt="" width="92" height="92" /><div><p className="eyebrow">Made for the next chapter</p><h2>Reading should feel<br /><em>like reading.</em></h2><p>OpenTheBook is being finished for its first free release.</p></div><a className="button button-dark button-disabled" href="#download" aria-disabled="true" onClick={(event) => event.preventDefault()}>Get the installer <span>↓</span></a></div>
+        <div className="closing-card"><img src="/logo.png" alt="" width="92" height="92" /><div><p className="eyebrow">Made for the next chapter</p><h2>Reading should feel<br /><em>like reading.</em></h2><p>Download the first free release for Windows or Linux.</p></div><a className={`button button-dark${downloadAvailable ? '' : ' button-disabled'}`} href={downloadAvailable ? downloadUrl : '#download'} aria-disabled={!downloadAvailable} onClick={downloadAvailable ? undefined : (event) => event.preventDefault()}>Get the installer <span>↓</span></a></div>
       </section>
 
       <footer className="site-footer section-shell"><a className="brand" href="#top"><span className="brand-mark"><img src="/logo.png" alt="" width="34" height="34" /></span><span>OpenTheBook</span></a><span className="footer-note">Simple software for people who like books.</span><div className="footer-links"><a href="/docs">Docs</a><a href="#faq">FAQ</a><a href="mailto:hello@openthebook.lol">Contact</a><a href="#release">License</a></div></footer>
