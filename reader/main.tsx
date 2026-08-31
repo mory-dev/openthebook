@@ -5,9 +5,10 @@ import { listen } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
 import { open } from '@tauri-apps/plugin-dialog';
 import { readFile } from '@tauri-apps/plugin-fs';
-import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { authorFromFilename, formatFromPath, inlineChapterImages, parseAzw3, parseEpub, parseMobi, type ParsedBook } from './lib/formats';
+import { Icon } from './lib/icons';
 import { SHORTCUTS } from './lib/shortcuts';
 import { DEFAULT_SETTINGS, loadHighlights, loadReadingState, loadSettings, openDefaultApps, saveHighlights, saveReadingState, saveSettings, type AppSettings, type BookProgress, type Highlight, type ReadingState, type ScrollStep } from './lib/storage';
 import { hasPreparedUpdate, installPreparedUpdate, prepareUpdate } from './lib/update';
@@ -30,6 +31,40 @@ const MIN_FONT = 0.85;
 const MAX_FONT = 1.35;
 
 const materializedCache = new Map<number, string>();
+
+type WorkerBookFormat = 'epub' | 'azw3' | 'mobi';
+
+function parseOnMainThread(buffer: ArrayBuffer, format: WorkerBookFormat): Promise<ParsedBook> {
+  if (format === 'epub') return parseEpub(buffer);
+  return Promise.resolve(format === 'azw3' ? parseAzw3(buffer) : parseMobi(buffer));
+}
+
+function parseBookInWorker(buffer: ArrayBuffer, format: WorkerBookFormat): Promise<ParsedBook> {
+  if (typeof Worker === 'undefined') return parseOnMainThread(buffer, format);
+
+  const fallbackBuffer = buffer.slice(0);
+  const workerBuffer = buffer.slice(0);
+  return new Promise((resolve, reject) => {
+    let worker: Worker;
+    try {
+      worker = new Worker(new URL('./lib/book-worker.ts', import.meta.url), { type: 'module' });
+    } catch {
+      void parseOnMainThread(fallbackBuffer, format).then(resolve, reject);
+      return;
+    }
+
+    worker.onmessage = (event: MessageEvent<{ error?: string; parsed?: ParsedBook }>) => {
+      worker.terminate();
+      if (event.data.parsed) resolve(event.data.parsed);
+      else reject(new Error(event.data.error || 'That book could not be opened.'));
+    };
+    worker.onerror = () => {
+      worker.terminate();
+      void parseOnMainThread(fallbackBuffer, format).then(resolve, reject);
+    };
+    worker.postMessage({ buffer: workerBuffer, format }, [workerBuffer]);
+  });
+}
 
 function isTauri(): boolean {
   return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
@@ -153,7 +188,7 @@ const BookContent = React.memo(function BookContent({ book, chapter, displayFull
       {Array.from({ length: displayFullBook ? book.chapters.length : 1 }, (_, sectionIndex) => {
         const index = displayFullBook ? sectionIndex : chapter;
         return (
-          <section className="book-section" data-chapter={index} key={index}>
+          <section className={`book-section ${index === chapter ? 'book-section-active' : ''}`} data-chapter={index} key={index}>
             {displayFullBook && index > 0 ? <hr className="chapter-divider" /> : null}
             <div dangerouslySetInnerHTML={{ __html: materializeChapter(book, index) }} />
           </section>
@@ -188,7 +223,6 @@ function App() {
   ));
   const [findOpen, setFindOpen] = useState(false);
   const [findQuery, setFindQuery] = useState('');
-  const [debouncedQuery, setDebouncedQuery] = useState('');
   const [findIndex, setFindIndex] = useState(0);
   const [totalMatches, setTotalMatches] = useState(0);
   const [helpOpen, setHelpOpen] = useState(false);
@@ -211,7 +245,9 @@ function App() {
   const pendingFontRatioRef = useRef<number | null>(null);
   const appliedModeRef = useRef<boolean | null>(null);
   const chapterRef = useRef(0);
-  const [splashReady, setSplashReady] = useState(false);
+  const loadRequestRef = useRef(0);
+  const settingsLoadedRef = useRef(false);
+  const highlightsLoadedRef = useRef(false);
   const settingsRef = useRef(settings);
   useEffect(() => { settingsRef.current = settings; });
 
@@ -222,8 +258,8 @@ function App() {
 
   useEffect(() => { chapterRef.current = chapter; });
 
-  const chromeForced = settingsOpen || highlightsOpen || !book || busy;
-  const chromeVisible = !settings.fullscreen || headerHover || chromeForced;
+  const chromeForced = settingsOpen || highlightsOpen || (!book && initialized && !busy);
+  const chromeVisible = !initialized ? false : !book ? !busy : headerHover || settingsOpen || highlightsOpen;
 
   const updateWindowState = useCallback(async () => {
     if (!isTauri()) return;
@@ -260,22 +296,20 @@ function App() {
   }, [book]);
 
   const handleFile = useCallback(async (path: string, bytes?: ArrayBuffer, savedProgress?: BookProgress) => {
+    const requestId = ++loadRequestRef.current;
     const format = formatFromPath(path);
-    console.log('[handleFile] called', { path, format, hasBytes: !!bytes, hasProgress: !!savedProgress });
     if (!format) { setMessage('OpenTheBook reads PDF, EPUB, AZW3, and MOBI files.'); return; }
     setBusy(true);
     restoringProgressRef.current = true;
     setMessage(`Opening ${shortName(path)}…`);
     try {
       const buffer = bytes ?? (await readFile(path)).buffer;
-      console.log('[handleFile] buffer loaded, size:', buffer.byteLength);
-      let parsed: ParsedBook;
-      if (format === 'epub') parsed = await parseEpub(buffer);
-      else if (format === 'azw3') parsed = parseAzw3(buffer);
-      else if (format === 'mobi') parsed = parseMobi(buffer);
-      else parsed = { title: shortName(path).replace(/\.pdf$/i, ''), format, chapters: [] };
+      if (requestId !== loadRequestRef.current) return;
+      const parsed: ParsedBook = format === 'pdf'
+        ? { title: shortName(path).replace(/\.pdf$/i, ''), format, chapters: [] }
+        : await parseBookInWorker(buffer, format);
+      if (requestId !== loadRequestRef.current) return;
       if (!parsed.author) parsed.author = authorFromFilename(path);
-      console.log('[handleFile] parsed', { title: parsed.title, format: parsed.format, chapters: parsed.chapters.length });
       
       const targetChapter = savedProgress?.chapter ?? parsed.startChapter ?? 0;
       materializedCache.clear();
@@ -284,7 +318,6 @@ function App() {
       appliedModeRef.current = settingsRef.current.displayFullBook;
       setMessage('');
       setInitialized(true);
-      console.log('[handleFile] setBook + setInitialized done', { targetChapter, displayFullBook: settingsRef.current.displayFullBook });
 
       const pref = settingsRef.current.formatSettings?.[format];
       if (pref) {
@@ -338,13 +371,14 @@ function App() {
         return nextState;
       });
     } catch (error) {
-      console.error('[handleFile] CAUGHT ERROR:', error);
+      if (requestId !== loadRequestRef.current) return;
+      console.error('[handleFile] Could not open book:', error);
       setMessage(error instanceof Error ? error.message : 'That book could not be opened.');
       setInitialized(true);
       restoringProgressRef.current = false;
       pendingRestoreRef.current = null;
     } finally {
-      setBusy(false);
+      if (requestId === loadRequestRef.current) setBusy(false);
     }
   }, []);
 
@@ -505,18 +539,25 @@ function App() {
     return () => media.removeEventListener('change', onChange);
   }, []);
 
-  useEffect(() => { void loadSettings().then(setSettings); }, []);
-  useEffect(() => { void loadHighlights().then(setHighlights); }, []);
-  useEffect(() => { void saveSettings(settings); }, [settings]);
-  useEffect(() => { void saveHighlights(highlights); }, [highlights]);
+  useEffect(() => {
+    if (!settingsLoadedRef.current) return;
+    void saveSettings(settings);
+  }, [settings]);
+  useEffect(() => {
+    if (!highlightsLoadedRef.current) return;
+    void saveHighlights(highlights);
+  }, [highlights]);
 
   useEffect(() => {
     if (!isTauri()) return;
-    void getVersion().then(setVersion).catch(() => {});
+    const timer = window.setTimeout(() => {
+      void getVersion().then(setVersion).catch(() => {});
+    }, 1200);
+    return () => window.clearTimeout(timer);
   }, []);
 
   useEffect(() => {
-    if (!isTauri()) return;
+    if (!isTauri() || !settingsLoadedRef.current) return;
     const win = getCurrentWindow();
     void win.setFullscreen(settings.fullscreen).then(updateWindowState);
   }, [settings.fullscreen, updateWindowState]);
@@ -536,35 +577,55 @@ function App() {
 
   useEffect(() => {
     if (!settings.updatesEnabled) return;
-    void prepareUpdate((state) => {
-      setUpdateState(state);
-      if (state === 'ready') updateRef.current = true;
-    });
+    const timer = window.setTimeout(() => {
+      void prepareUpdate((state) => {
+        setUpdateState(state);
+        if (state === 'ready') updateRef.current = true;
+      });
+    }, 2500);
+    return () => window.clearTimeout(timer);
   }, [settings.updatesEnabled]);
 
-  // Initial load: check CLI args, or restore last opened book from reading_state without flashing
+  // Bootstrap persisted state in parallel, but never block the initial window reveal on it.
   useEffect(() => {
     let cancelled = false;
-    void (async () => {
-      let bookToOpen: string | null = null;
-      if (isTauri()) {
-        const initialPath = await invoke<string | null>('initial_book_path');
-        if (cancelled) return;
-        if (initialPath) bookToOpen = initialPath;
-      }
-      const state = await loadReadingState();
+    let highlightsTimer: number | undefined;
+    const initialPathPromise = isTauri()
+      ? invoke<string | null>('initial_book_path')
+      : Promise.resolve(null);
+
+    void Promise.all([initialPathPromise, loadSettings(), loadReadingState()]).then(([initialPath, loadedSettings, state]) => {
       if (cancelled) return;
+      settingsLoadedRef.current = true;
+      settingsRef.current = loadedSettings;
+      setSettings(loadedSettings);
       setReadingState(state);
 
-      const targetPath = bookToOpen || state.lastBookPath;
+      const targetPath = initialPath || state.lastBookPath;
       if (targetPath) {
-        const progress = state.progress[targetPath];
-        void handleFile(targetPath, undefined, progress);
+        void handleFile(targetPath, undefined, state.progress[targetPath]);
       } else {
         setInitialized(true);
       }
-    })();
-    return () => { cancelled = true; };
+
+      highlightsTimer = window.setTimeout(() => {
+        void loadHighlights().then((loadedHighlights) => {
+          if (cancelled) return;
+          highlightsLoadedRef.current = true;
+          setHighlights(loadedHighlights);
+        });
+      }, 0);
+    }).catch(() => {
+      if (cancelled) return;
+      settingsLoadedRef.current = true;
+      highlightsLoadedRef.current = true;
+      setInitialized(true);
+    });
+
+    return () => {
+      cancelled = true;
+      if (highlightsTimer !== undefined) window.clearTimeout(highlightsTimer);
+    };
   }, [handleFile]);
 
   const windowRevealedRef = useRef(false);
@@ -580,17 +641,15 @@ function App() {
     });
   }, []);
 
-  // Reveal window smoothly once layout, restored scroll, and state are completely stabilized
+  // Reveal the shell on the first frame; the reading surface transitions from skeleton to content.
   useEffect(() => {
-    if (initialized && !busy) {
-      const timer = window.setTimeout(revealWindow, 60);
-      return () => window.clearTimeout(timer);
-    }
-  }, [initialized, busy, revealWindow]);
+    const frame = window.requestAnimationFrame(revealWindow);
+    return () => window.cancelAnimationFrame(frame);
+  }, [revealWindow]);
 
-  // Safety fallback to guarantee window is revealed even on cold start
+  // Safety fallback to guarantee the hidden window is revealed even on a cold start.
   useEffect(() => {
-    const timer = window.setTimeout(revealWindow, 500);
+    const timer = window.setTimeout(revealWindow, 350);
     return () => window.clearTimeout(timer);
   }, [revealWindow]);
 
@@ -1008,7 +1067,7 @@ function App() {
   const showHeader = () => {
     if (hideHeaderTimerRef.current !== undefined) window.clearTimeout(hideHeaderTimerRef.current);
     setHeaderHover(true);
-    if (settings.fullscreen) {
+    if (book) {
       hideHeaderTimerRef.current = window.setTimeout(() => {
         if (!chromeForced) setHeaderHover(false);
       }, 2500);
@@ -1023,7 +1082,7 @@ function App() {
   };
 
   const onStagePointerMove = (e: React.PointerEvent) => {
-    if (settings.fullscreen && headerHover && e.clientY > 75 && !chromeForced) {
+    if (book && headerHover && e.clientY > 75 && !chromeForced) {
       if (hideHeaderTimerRef.current !== undefined) window.clearTimeout(hideHeaderTimerRef.current);
       setHeaderHover(false);
     }
@@ -1063,13 +1122,13 @@ function App() {
           persistCurrentProgress(0, 0, 0, page);
         }}
       />
-    : book
+      : book
       ? <BookContent book={book} chapter={chapter} displayFullBook={settings.displayFullBook} fontScale={settings.fontScale} onContextMenu={handleContextMenu} bookRef={bookRef} />
       : initialized
         ? <EmptyState onChoose={chooseBook} />
-        : null;
+        : <StartupSurface />;
 
-  return <div className={`reader-app ${settings.fullscreen ? 'reader-fullscreen' : 'reader-windowed'} ${dark ? 'reader-dark' : ''}`} onDrop={onDrop} onDragOver={(event) => event.preventDefault()} onContextMenu={(event) => {
+  return <div className={`reader-app ${settings.fullscreen ? 'reader-fullscreen' : 'reader-windowed'} ${book ? 'reader-book-active' : ''} ${!initialized ? 'reader-starting' : ''} ${dark ? 'reader-dark' : ''}`} onDrop={onDrop} onDragOver={(event) => event.preventDefault()} onContextMenu={(event) => {
     if (!(event.target instanceof Node) || !bookRef.current?.contains(event.target)) {
       event.preventDefault();
       clearPendingSelection();
@@ -1082,17 +1141,17 @@ function App() {
           ? <><span className="reader-title-main" data-tauri-drag-region>{book.title}</span>{book.author ? <span className="reader-author" data-tauri-drag-region>{book.author}</span> : null}</>
           : 'Your quiet reading space'}</div>
         <div className="reader-actions">
-          <button className="icon-button" onClick={() => setHighlightsOpen((value) => !value)} aria-label="Highlights (Ctrl+B)" title="Highlights (Ctrl+B)">⌘</button>
-          <button className="icon-button" onClick={openFind} aria-label="Find in book (Ctrl+F)" title="Find (Ctrl+F)">⌕</button>
-          <button className="icon-button" onClick={() => setSettingsOpen((value) => !value)} aria-label="Settings (Ctrl+S)" title="Settings (Ctrl+S)">⚙</button>
-          <button className="icon-button" onClick={() => setHelpOpen((value) => !value)} aria-label="Shortcuts & Help (Ctrl+/)" title="Shortcuts (Ctrl+/)">?</button>
-          <button className="icon-button" onClick={() => setSettings((value) => ({ ...value, theme: value.theme === 'dark' ? 'light' : 'dark' }))} aria-label="Toggle reading theme">{dark ? '☼' : '☾'}</button>
+          <button className="icon-button" onClick={() => setHighlightsOpen((value) => !value)} aria-label="Highlights (Ctrl+B)" title="Highlights (Ctrl+B)"><Icon name="bookmark" /></button>
+          <button className="icon-button" onClick={openFind} aria-label="Find in book (Ctrl+F)" title="Find (Ctrl+F)"><Icon name="search" /></button>
+          <button className="icon-button" onClick={() => setSettingsOpen((value) => !value)} aria-label="Settings (Ctrl+S)" title="Settings (Ctrl+S)"><Icon name="settings" /></button>
+          <button className="icon-button" onClick={() => setHelpOpen((value) => !value)} aria-label="Shortcuts & Help (Ctrl+/)" title="Shortcuts (Ctrl+/)"><Icon name="help" /></button>
+          <button className="icon-button" onClick={() => setSettings((value) => ({ ...value, theme: value.theme === 'dark' ? 'light' : 'dark' }))} aria-label="Toggle reading theme" title="Toggle reading theme"><Icon name={dark ? 'sun' : 'moon'} /></button>
           {isTauri() ? <div className="window-controls">
-            <button onClick={() => void getCurrentWindow().minimize()} aria-label="Minimize window" title="Minimize">─</button>
+            <button onClick={() => void getCurrentWindow().minimize()} aria-label="Minimize window" title="Minimize"><Icon name="minimize" size={15} /></button>
             <button onClick={() => void toggleMaximizeOrFullscreen()} aria-label={isWindowFullscreen ? "Exit fullscreen" : "Maximize or restore window"} title={isWindowFullscreen ? "Exit fullscreen" : "Maximize / Restore"}>
-              {isWindowFullscreen ? '⤢' : '▢'}
+              <Icon name={isWindowFullscreen ? 'restore' : 'maximize'} size={15} />
             </button>
-            <button className="close" onClick={() => void getCurrentWindow().close()} aria-label="Close window" title="Close">×</button>
+            <button className="close" onClick={() => void getCurrentWindow().close()} aria-label="Close window" title="Close"><Icon name="close" size={15} /></button>
           </div> : null}
         </div>
       </header>
@@ -1132,26 +1191,26 @@ function App() {
         aria-label="Find in book"
       />
       <span className="find-count">{totalMatches ? `${findIndex + 1} / ${totalMatches}` : '0 / 0'}</span>
-      <button type="button" onClick={() => goFind(-1)} aria-label="Previous match">↑</button>
-      <button type="button" onClick={() => goFind(1)} aria-label="Next match">↓</button>
-      <button type="button" onClick={closeFind} aria-label="Close find">×</button>
+      <button type="button" onClick={() => goFind(-1)} aria-label="Previous match"><Icon name="chevron-up" size={14} /></button>
+      <button type="button" onClick={() => goFind(1)} aria-label="Next match"><Icon name="chevron-down" size={14} /></button>
+      <button type="button" onClick={closeFind} aria-label="Close find"><Icon name="close" size={14} /></button>
     </div> : null}
 
-    {settings.fullscreen && book && !chromeVisible ? <div className="header-hover-strip" onPointerEnter={showHeader} onPointerMove={showHeader} /> : null}
+    {book && !chromeVisible ? <div className="header-hover-strip" onPointerEnter={showHeader} onPointerMove={showHeader} /> : null}
     <div className={`reader-layout ${sidebarOpen ? 'reader-layout-sidebar' : ''}`}>
       {sidebarOpen ? <aside className="reader-rail">
-        <button className="rail-open" onClick={chooseBook} aria-label="Open a book">+</button>
+        <button className="rail-open" onClick={chooseBook} aria-label="Open a book"><Icon name="plus" size={16} /></button>
         {book?.chapters.length ? <div className="chapter-list">{book.chapters.map((_, index) => <button className={chapter === index ? 'active' : ''} key={index} onClick={() => goToChapter(index)}>{String(index + 1).padStart(2, '0')}</button>)}</div> : null}
       </aside> : null}
-      <main className="reading-stage" ref={stageRef} onScroll={handleStageScroll} onPointerMove={onStagePointerMove}><div className="reading-paper">{busy ? <div className="loading-state"><span className="spinner" />Opening your book…</div> : content}</div></main>
+      <main className="reading-stage" ref={stageRef} onScroll={handleStageScroll} onPointerMove={onStagePointerMove}><div className="reading-paper">{busy ? <StartupSurface /> : content}</div></main>
     </div>
     {highlightsOpen ? <aside className="bookmarks-rail" aria-label="Highlights">
-      <div className="rail-heading"><span>Highlights</span><button onClick={() => setHighlightsOpen(false)} aria-label="Close highlights">×</button></div>
+      <div className="rail-heading"><span>Highlights</span><button onClick={() => setHighlightsOpen(false)} aria-label="Close highlights"><Icon name="close" size={15} /></button></div>
       {bookHighlights.length
         ? <div className="bookmark-list">{bookHighlights.map((highlight) => <div className="bookmark-item" key={highlight.id} role="button" tabIndex={0} onClick={() => goToHighlight(highlight)} onKeyDown={(event) => { if (event.key === 'Enter') goToHighlight(highlight); }}>
           <p>{highlight.text}</p>
           <small>Chapter {String((highlight.locator.chapter ?? 0) + 1).padStart(2, '0')}</small>
-          <button className="bookmark-remove" aria-label="Remove highlight" onClick={(event) => { event.stopPropagation(); removeHighlight(highlight.id); }}>×</button>
+          <button className="bookmark-remove" aria-label="Remove highlight" onClick={(event) => { event.stopPropagation(); removeHighlight(highlight.id); }}><Icon name="close" size={13} /></button>
         </div>)}</div>
         : <p className="rail-empty">Select a passage, then right-click and choose Highlight to save it here.</p>}
     </aside> : null}
@@ -1165,15 +1224,15 @@ function App() {
         {book ? (
           <span className="reading-progress-info">
             {book.format === 'pdf'
-              ? `Page ${pdfPage} of ${pdfTotalPages || 1} • ${Math.round((pdfPage / (pdfTotalPages || 1)) * 100)}%`
+              ? `Page ${pdfPage} of ${pdfTotalPages || 1} · ${Math.round((pdfPage / (pdfTotalPages || 1)) * 100)}%`
               : book.chapters.length > 1
-                ? `Chapter ${chapter + 1} of ${book.chapters.length} • ${readingPercent}%`
+                ? `Chapter ${chapter + 1} of ${book.chapters.length} · ${readingPercent}%`
                 : `${readingPercent}%`}
           </span>
         ) : null}
-        <button onClick={() => changeFont(settings.fontScale - FONT_STEP)} aria-label="Decrease text size">A−</button>
+        <button onClick={() => changeFont(settings.fontScale - FONT_STEP)} aria-label="Decrease text size" title="Decrease text size"><Icon name="minus" size={13} /><span className="sr-only">A−</span></button>
         <span className="format-badge">{book?.format?.toUpperCase() ?? 'READY'}</span>
-        <button onClick={() => changeFont(settings.fontScale + FONT_STEP)} aria-label="Increase text size">A+</button>
+        <button onClick={() => changeFont(settings.fontScale + FONT_STEP)} aria-label="Increase text size" title="Increase text size"><Icon name="plus" size={13} /><span className="sr-only">A+</span></button>
       </div>
     </footer>
     <input ref={inputRef} hidden type="file" accept=".pdf,.epub,.azw3,.mobi" onChange={(event) => { const file = event.target.files?.[0]; if (file) void file.arrayBuffer().then((buffer) => handleFile(file.name, buffer)); }} />
@@ -1183,7 +1242,7 @@ function App() {
 function HelpModal({ onClose }: { onClose: () => void }) {
   return <div className="modal-overlay" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
     <div className="settings-modal" role="dialog" aria-label="Keyboard Shortcuts" aria-modal="true">
-      <header className="modal-header"><h2>Keyboard Shortcuts</h2><button className="modal-close" onClick={onClose} aria-label="Close shortcuts">×</button></header>
+      <header className="modal-header"><h2>Keyboard Shortcuts</h2><button className="modal-close" onClick={onClose} aria-label="Close shortcuts"><Icon name="close" size={16} /></button></header>
       <div className="settings-body">
         <table className="shortcuts-table">
           <tbody>
@@ -1209,7 +1268,7 @@ function SettingsModal({ settings, onChange, changeFont, version, updateState, o
   };
   return <div className="modal-overlay" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
     <div className="settings-modal" role="dialog" aria-label="Settings" aria-modal="true">
-      <header className="modal-header"><h2>Settings</h2><button className="modal-close" onClick={onClose} aria-label="Close settings">×</button></header>
+      <header className="modal-header"><h2>Settings</h2><button className="modal-close" onClick={onClose} aria-label="Close settings"><Icon name="close" size={16} /></button></header>
       <div className="settings-body">
         <label className="setting-row"><span><b>Fullscreen</b><small>Open the reader fullscreen by default</small></span><input type="checkbox" checked={settings.fullscreen} onChange={(event) => set({ fullscreen: event.target.checked })} /></label>
         <label className="setting-row"><span><b>Display full book</b><small>Read the whole book in one continuous scroll</small></span><input type="checkbox" checked={settings.displayFullBook} onChange={(event) => set({ displayFullBook: event.target.checked })} /></label>
@@ -1231,8 +1290,19 @@ function SettingsModal({ settings, onChange, changeFont, version, updateState, o
   </div>;
 }
 
+function StartupSurface() {
+  return (
+    <div className="startup-surface" role="status" aria-label="Opening your book">
+      <div className="startup-skeleton startup-skeleton-heading" />
+      <div className="startup-skeleton startup-skeleton-line" />
+      <div className="startup-skeleton startup-skeleton-line startup-skeleton-line-short" />
+      <span className="startup-spinner" />
+    </div>
+  );
+}
+
 function EmptyState({ onChoose }: { onChoose: () => void }) {
-  return <div className="empty-state"><img src="/logo.png" alt="" width="112" height="112" /><p className="empty-kicker">A quiet place to read</p><h1>Just open a book.</h1><p>Drop a PDF, EPUB, AZW3, or MOBI file here, or choose one from your computer.</p><button className="open-button" onClick={onChoose}>Choose a book <span>→</span></button></div>;
+  return <div className="empty-state"><img src="/logo.png" alt="" width="112" height="112" /><p className="empty-kicker">A quiet place to read</p><h1>Just open a book.</h1><p>Drop a PDF, EPUB, AZW3, or MOBI file here, or choose one from your computer.</p><button className="open-button" onClick={onChoose}>Choose a book <Icon name="arrow-right" size={15} /></button></div>;
 }
 
 function PdfView({ path, data, initialPage = 1, displayFullBook = true, fontScale = 1.0, onPageChange }: { path: string; data?: ArrayBuffer; initialPage?: number; displayFullBook?: boolean; fontScale?: number; onPageChange?: (page: number, total: number) => void }) {
@@ -1320,9 +1390,9 @@ function PdfView({ path, data, initialPage = 1, displayFullBook = true, fontScal
     <div className="pdf-view">
       <PdfPageItem doc={pdfDoc} pageNumber={page} fontScale={fontScale} />
       <div className="pdf-controls">
-        <button disabled={page <= 1} onClick={() => changePage(page - 1)} aria-label="Previous page">←</button>
+        <button disabled={page <= 1} onClick={() => changePage(page - 1)} aria-label="Previous page"><Icon name="chevron-left" size={15} /></button>
         <span>{page} / {pages}</span>
-        <button disabled={page >= pages} onClick={() => changePage(page + 1)} aria-label="Next page">→</button>
+        <button disabled={page >= pages} onClick={() => changePage(page + 1)} aria-label="Next page"><Icon name="chevron-right" size={15} /></button>
       </div>
     </div>
   );
