@@ -1,0 +1,68 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "OpenTheBook",
+  "version": "0.1.0",
+  "identifier": "lol.openthebook.reader",
+  "build": {
+    "beforeDevCommand": "npm run desktop:dev",
+    "beforeBuildCommand": "npm run desktop:build",
+    "devUrl": "http://localhost:1420",
+    "frontendDist": "../dist-reader"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "OpenTheBook",
+        "width": 1100,
+        "height": 760,
+        "minWidth": 760,
+        "minHeight": 520,
+        "resizable": true,
+        "center": true,
+        "decorations": true,
+        "shadow": true,
+        "fullscreen": false,
+        "visible": false
+      }
+    ],
+    "security": { "csp": null }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["nsis", "appimage", "deb"],
+    "icon": ["icons/icon.png"],
+    "publisher": "OpenTheBook",
+    "homepage": "https://openthebook.lol",
+    "copyright": "Copyright © OpenTheBook",
+    "category": "Utility",
+    "shortDescription": "A free, simple ebook reader",
+    "longDescription": "Open PDF, EPUB, AZW3, and MOBI files in a calm, lightweight reading space.",
+    "license": "MIT",
+    "licenseFile": "../LICENSE",
+    "createUpdaterArtifacts": false,
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser",
+        "displayLanguageSelector": false,
+        "startMenuFolder": "OpenTheBook",
+        "installerIcon": "icons/icon.ico",
+        "headerImage": "icons/installer-header.bmp",
+        "sidebarImage": "icons/installer-sidebar.bmp",
+        "uninstallerIcon": "icons/icon.ico",
+        "uninstallerHeaderImage": "icons/installer-header.bmp",
+        "installerHooks": "windows/hooks.nsh"
+      }
+    },
+    "linux": {
+      "deb": { "depends": [] }
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEJBMkE5OEM0NUFGQjg3Q0QKUldUTmgvdGF4SmdxdWkxenA0NGloSjdERzJFWk5GU3A1VnI3WUdXbkxJVkYza250bkcxUWswNTQK",
+      "endpoints": ["https://openthebook.lol/updates/latest.json"],
+      "windows": { "installMode": "passive" }
+    }
+  }
+}

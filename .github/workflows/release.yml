@@ -1,0 +1,185 @@
+name: Build and release OpenTheBook
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Semver release version, for example 0.1.0
+        required: true
+        type: string
+
+permissions: {}
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  RELEASE_VERSION: ${{ inputs.version || github.ref_name }}
+
+jobs:
+  build:
+    name: Build ${{ matrix.platform }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: windows
+            runner: windows-latest
+          - platform: linux
+            runner: ubuntu-24.04
+    runs-on: ${{ matrix.runner }}
+    environment: release
+    permissions:
+      contents: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+
+      - name: Install Linux packaging dependencies
+        if: matrix.platform == 'linux'
+        run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+
+      - name: Install project dependencies
+        run: npm ci
+
+      - name: Set release version
+        shell: bash
+        run: node scripts/set-version.mjs "${RELEASE_VERSION#v}"
+
+      - name: Build Tauri bundles
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: npm run tauri:build -- --ci
+
+      - name: Find Windows installer
+        if: matrix.platform == 'windows'
+        id: windows-artifact
+        shell: pwsh
+        run: |
+          $installer = Get-ChildItem -LiteralPath 'src-tauri/target/release/bundle/nsis' -Filter '*.exe' | Where-Object { $_.Name -notmatch 'uninstall' } | Select-Object -First 1
+          if (-not $installer) { throw 'Windows installer was not produced.' }
+          "installer=$($installer.FullName)" >> $env:GITHUB_OUTPUT
+          "filename=$($installer.Name)" >> $env:GITHUB_OUTPUT
+
+      - name: Azure login
+        if: matrix.platform == 'windows'
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Authenticode sign Windows installer
+        if: matrix.platform == 'windows'
+        uses: azure/artifact-signing-action@v2
+        with:
+          endpoint: ${{ vars.AZURE_ENDPOINT }}
+          signing-account-name: ${{ secrets.AZURE_ACCOUNT_NAME }}
+          certificate-profile-name: ${{ secrets.AZURE_CERT_PROFILE_NAME }}
+          files: ${{ steps.windows-artifact.outputs.installer }}
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+
+      - name: Re-sign updater artifact after Authenticode
+        if: matrix.platform == 'windows'
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        shell: pwsh
+        run: npx tauri signer sign --password "$env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD" "${{ steps.windows-artifact.outputs.installer }}"
+
+      - name: Stage Windows release files
+        if: matrix.platform == 'windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path release-staged/windows | Out-Null
+          Copy-Item -LiteralPath '${{ steps.windows-artifact.outputs.installer }}' -Destination release-staged/windows/
+          Copy-Item -LiteralPath '${{ steps.windows-artifact.outputs.installer }}.sig' -Destination release-staged/windows/
+          Get-ChildItem -LiteralPath release-staged/windows -File | Get-FileHash -Algorithm SHA256 | ForEach-Object { "$($_.Hash.ToLowerInvariant())  $($_.Path | Split-Path -Leaf)" } | Set-Content -LiteralPath release-staged/windows/SHA256SUMS
+
+      - name: Stage Linux release files
+        if: matrix.platform == 'linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p release-staged/linux
+          appimage=$(find src-tauri/target/release/bundle/appimage -maxdepth 1 -name '*.AppImage' -type f | head -n 1)
+          test -n "$appimage"
+          cp "$appimage" release-staged/linux/
+          cp "$appimage.sig" release-staged/linux/
+          deb=$(find src-tauri/target/release/bundle/deb -maxdepth 1 -name '*.deb' -type f | head -n 1)
+          test -n "$deb"
+          cp "$deb" release-staged/linux/
+          if [ -f "$deb.sig" ]; then cp "$deb.sig" release-staged/linux/; fi
+          sha256sum release-staged/linux/* > release-staged/linux/SHA256SUMS
+
+      - name: Upload staged release files
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.platform }}
+          path: release-staged/
+          if-no-files-found: error
+
+  publish:
+    name: Publish GitHub Release and update manifest
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: release-*
+          path: release-artifacts
+          merge-multiple: true
+      - name: Build signed update manifest
+        shell: bash
+        run: node scripts/build-update-manifest.mjs "${RELEASE_VERSION#v}" release-artifacts public/updates/latest.json
+      - name: Create or update GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          release_tag="v${RELEASE_VERSION#v}"
+          if ! gh release view "$release_tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release create "$release_tag" --repo "$GITHUB_REPOSITORY" --title "$release_tag" --generate-notes
+          fi
+          gh release upload "$release_tag" release-artifacts/windows/* release-artifacts/linux/* --repo "$GITHUB_REPOSITORY" --clobber
+      - name: Build website with the new release manifest
+        run: npm run build
+      - name: Deploy website and update manifest to Cloudflare
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: deploy --config dist/server/wrangler.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: website-release-${{ github.ref_name }}
+          path: |
+            dist/
+            public/updates/latest.json

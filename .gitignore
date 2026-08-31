@@ -1,0 +1,57 @@
+# dependencies
+/node_modules
+/.pnp
+.pnp.*
+.yarn/*
+!.yarn/patches
+!.yarn/plugins
+!.yarn/releases
+!.yarn/versions
+
+# testing
+/coverage
+
+# next.js
+/.next/
+/.vinext/
+/out/
+
+# misc
+.DS_Store
+Thumbs.db
+*.pem
+*.key
+*.p12
+*.pfx
+*.cer
+*.crt
+*.log
+
+# debug
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# local environment
+.env*
+!.env.example
+.tauri/
+
+# local-only workspace material
+/tmp/
+/.codex/
+/.agents/
+IDEAS.md
+
+# deployment and generated files
+.vercel
+next-env.d.ts
+/dist/
+/dist-reader/
+/.wrangler/
+/src-tauri/target/
+/src-tauri/gen/
+*.tsbuildinfo
+/outputs/
+/work/
