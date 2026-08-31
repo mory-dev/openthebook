@@ -123,7 +123,7 @@ jobs:
           New-Item -ItemType Directory -Force -Path release-staged/windows | Out-Null
           Copy-Item -LiteralPath '${{ steps.windows-artifact.outputs.installer }}' -Destination release-staged/windows/
           Copy-Item -LiteralPath '${{ steps.windows-artifact.outputs.installer }}.sig' -Destination release-staged/windows/
-          Get-ChildItem -LiteralPath release-staged/windows -File | Get-FileHash -Algorithm SHA256 | ForEach-Object { "$($_.Hash.ToLowerInvariant())  $($_.Path | Split-Path -Leaf)" } | Set-Content -LiteralPath release-staged/windows/SHA256SUMS
+          Get-ChildItem -LiteralPath release-staged/windows -File | Get-FileHash -Algorithm SHA256 | ForEach-Object { "$($_.Hash.ToLowerInvariant())  $($_.Path | Split-Path -Leaf)" } | Set-Content -LiteralPath release-staged/windows/SHA256SUMS-windows
 
       - name: Stage Linux release files
         if: matrix.platform == 'linux'
@@ -139,7 +139,7 @@ jobs:
           test -n "$deb"
           cp "$deb" release-staged/linux/
           if [ -f "$deb.sig" ]; then cp "$deb.sig" release-staged/linux/; fi
-          sha256sum release-staged/linux/* > release-staged/linux/SHA256SUMS
+          sha256sum release-staged/linux/* > release-staged/linux/SHA256SUMS-linux
 
       - name: Upload staged release files
         uses: actions/upload-artifact@v4
